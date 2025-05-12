@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>步步為營</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        canvas {
+            touch-action: none; /* Prevent default touch behaviors */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center min-h-screen font-sans">
+    <div id="mainMenu" class="flex flex-col items-center justify-center w-full max-w-md p-4">
+        <h1 class="text-3xl font-bold mb-6">步步為營</h1>
+        <button id="playerVsPlayer" class="bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-600 mb-4 w-48">玩家對戰</button>
+        <button id="playerVsComputer" class="bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-600 mb-4 w-48">玩家對電腦</button>
+        <button id="tutorial" class="bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-600 w-48">遊戲教學</button>
+    </div>
+
+    <div id="gameScreen" class="hidden flex flex-col items-center w-full max-w-md p-4">
+        <h1 class="text-2xl font-bold mb-4">步步為營</h1>
+        <div id="modeText" class="text-sm mb-2"></div>
+        <canvas id="boardCanvas" class="border border-black" width="360" height="360"></canvas>
+        <div class="flex space-x-2 my-4">
+            <button id="movePawn" class="bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-600">移動棋子</button>
+            <button id="placeHorizontal" class="bg-gray-300 text-black font-semibold py-2 px-4 rounded-lg hover:bg-gray-400">放置橫牆</button>
+            <button id="placeVertical" class="bg-gray-300 text-black font-semibold py-2 px-4 rounded-lg hover:bg-gray-400">放置直牆</button>
+        </div>
+        <div id="statusText" class="text-lg font-semibold mb-4"></div>
+        <button id="backToMenu" class="bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-600">返回主選單</button>
+    </div>
+
+    <div id="tutorialScreen" class="hidden flex flex-col items-center w-full max-w-md p-4">
+        <h1 class="text-2xl font-bold mb-4">遊戲教學</h1>
+        <div class="text-left space-y-4">
+            <p>步步為營（Quoridor）是一款1997年由Mirko Marchesi設計的抽象策略遊戲，榮獲最佳動腦獎。玩家需將棋子移到對手底線，同時阻撓對手！</p>
+            <h2 class="text-xl font-semibold">遊戲目標</h2>
+            <p>率先將你的棋子移動到對手的底線（對面邊緣的任一格）即可獲勝。</p>
+            <h2 class="text-xl font-semibold">棋子移動</h2>
+            <p>每回合可移動棋子一格（上下左右，不可斜走，不可穿牆）。若與對手棋子面對面，可跳到對手後方，或若後方有牆，跳到旁邊。</p>
+            <h2 class="text-xl font-semibold">放置圍牆</h2>
+            <p>每回合可選擇放置一堵圍牆（橫或直，佔兩格），阻擋對手路徑。每人10堵牆，用完只能移動棋子。牆不可完全堵死對手路徑。</p>
+            <h2 class="text-xl font-semibold">遊戲規則</h2>
+            <ul class="list-disc pl-5">
+                <li>順時針輪流行動，每回合選擇移動棋子或放置圍牆。</li>
+                <li>牆不可超過棋盤邊界，且必須留至少一條路給對手。</li>
+                <li>率先到達對手底線（不限正中央）即獲勝。</li>
+            </ul>
+            <button id="backFromTutorial" class="bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-600 mt-4">返回主選單</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('boardCanvas');
+        const ctx = canvas.getContext('2d');
+        const cellSize = canvas.width / 9;
+
+        let gameState = {
+            players: [],
+            walls: { horizontal: [], vertical: [] },
+            currentPlayerIndex: 0,
+            gameOver: false,
+            isComputerOpponent: false,
+            timerSeconds: 60,
+            action: 'move',
+            aiStrategy: 'balanced' // goalOriented, wallHeavy, balanced
+        };
+
+        let timerInterval = null;
+
+        // Initialize game
+        function initGame(isComputerOpponent) {
+            gameState = {
+                players: [
+                    { id: 1, color: 'red', pawn: { x: 4, y: 8 }, walls: 10, goalRow: 0, isComputer: false },
+                    { id: 2, color: 'blue', pawn: { x: 4, y: 0 }, walls: 10, goalRow: 8, isComputer: isComputerOpponent }
+                ],
+                walls: { horizontal: [], vertical: [] },
+                currentPlayerIndex: 0,
+                gameOver: false,
+                isComputerOpponent: isComputerOpponent,
+                timerSeconds: 60,
+                action: 'move',
+                aiStrategy: ['goalOriented', 'wallHeavy', 'balanced'][Math.floor(Math.random() * 3)]
+            };
+            document.getElementById('modeText').textContent = `模式：${isComputerOpponent ? '玩家對電腦' : '玩家對戰'}`;
+            startTimer();
+            updateStatusText();
+            renderBoard();
+            if (isComputerOpponent && gameState.players[gameState.currentPlayerIndex].isComputer) {
+                setTimeout(makeComputerMove, 300);
+            }
+        }
+
+        // Render board
+        function renderBoard() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Draw grid
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < 9; i++) {
+                for (let j = 0; j < 9; j++) {
+                    ctx.strokeRect(j * cellSize, i * cellSize, cellSize, cellSize);
+                }
+            }
+            // Draw walls
+            gameState.walls.horizontal.forEach(wall => {
+                ctx.fillStyle = wall.color;
+                ctx.fillRect(wall.x * cellSize, (wall.y + 1) * cellSize - 2.5, cellSize * 2, 5);
+            });
+            gameState.walls.vertical.forEach(wall => {
+                ctx.fillStyle = wall.color;
+                ctx.fillRect((wall.x + 1) * cellSize - 2.5, wall.y * cellSize, 5, cellSize * 2);
+            });
+            // Draw pawns
+            gameState.players.forEach(player => {
+                ctx.fillStyle = player.color;
+                ctx.beginPath();
+                ctx.arc(player.pawn.x * cellSize + cellSize / 2, player.pawn.y * cellSize + cellSize / 2, cellSize * 0.4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        // Timer
+        function startTimer() {
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if (gameState.timerSeconds > 0) {
+                    gameState.timerSeconds--;
+                    updateStatusText();
+                } else {
+                    switchPlayer();
+                }
+            }, 1000);
+        }
+
+        function stopTimer() {
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = null;
+        }
+
+        function resetTimer() {
+            gameState.timerSeconds = 60;
+            startTimer();
+        }
+
+        // Update status text
+        function updateStatusText() {
+            if (gameState.gameOver) {
+                document.getElementById('statusText').textContent = `玩家 ${gameState.players[gameState.currentPlayerIndex].id} (${gameState.players[gameState.currentPlayerIndex].color === 'red' ? '紅色' : '藍色'}) 獲勝！`;
+                return;
+            }
+            const player = gameState.players[gameState.currentPlayerIndex];
+            const actionText = gameState.action === 'move' ? '移動' : gameState.action === 'placeHorizontal' ? '放置橫牆' : '放置直牆';
+            document.getElementById('statusText').textContent = player.isComputer ?
+                `電腦回合：${actionText} 剩餘時間: ${gameState.timerSeconds} 秒` :
+                `玩家 ${player.id} (${player.color === 'red' ? '紅色' : '藍色'}) 回合：${actionText} 剩餘時間: ${gameState.timerSeconds} 秒`;
+        }
+
+        // Switch player
+        function switchPlayer() {
+            gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
+            pathCache = {};
+            shortestPathCache = {};
+            resetTimer();
+            updateStatusText();
+            renderBoard();
+            if (gameState.isComputerOpponent && gameState.players[gameState.currentPlayerIndex].isComputer && !gameState.gameOver) {
+                setTimeout(makeComputerMove, 300);
+            }
+        }
+
+        // Pathfinding cache
+        let pathCache = {};
+        let shortestPathCache = {};
+
+        // Valid moves
+        function validMoves(player) {
+            const moves = [];
+            const directions = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+            for (const [dx, dy] of directions) {
+                const newX = player.pawn.x + dx;
+                const newY = player.pawn.y + dy;
+                if (isValidMove(player, newX, newY)) {
+                    moves.push({ x: newX, y: newY });
+                }
+                const jumpX = player.pawn.x + dx * 2;
+                const jumpY = player.pawn.y + dy * 2;
+                if (isValidMove(player, jumpX, jumpY)) {
+                    moves.push({ x: jumpX, y: jumpY });
+                }
+            }
+            return moves;
+        }
+
+        function isValidMove(player, newX, newY) {
+            console.log(`Checking move for player ${player.id}: from (${player.pawn.x},${player.pawn.y}) to (${newX},${newY})`);
+            if (newX < 0 || newX >= 9 || newY < 0 || newY >= 9) {
+                console.log(`Move invalid: out of bounds`);
+                return false;
+            }
+            const dx = newX - player.pawn.x;
+            const dy = newY - player.pawn.y;
+            if (Math.abs(dx) + Math.abs(dy) > 2 || Math.abs(dx) + Math.abs(dy) === 0) {
+                console.log(`Move invalid: distance too large or zero`);
+                return false;
+            }
+            if (gameState.players.some(p => p.id !== player.id && p.pawn.x === newX && p.pawn.y === newY)) {
+                console.log(`Move invalid: target occupied by opponent`);
+                return false;
+            }
+            if (Math.abs(dx) + Math.abs(dy) === 2) {
+                const otherPlayer = gameState.players.find(p => p.id !== player.id);
+                const midX = player.pawn.x + dx / 2;
+                const midY = player.pawn.y + dy / 2;
+                if (otherPlayer.pawn.x !== midX || otherPlayer.pawn.y !== midY) {
+                    console.log(`Jump invalid: no opponent at mid point (${midX},${midY})`);
+                    return false;
+                }
+                if (isWallBlocking(player.pawn.x, player.pawn.y, newX, newY)) {
+                    console.log(`Jump invalid: blocked by wall`);
+                    return false;
+                }
+                console.log(`Jump valid`);
+                return true;
+            }
+            if (isWallBlocking(player.pawn.x, player.pawn.y, newX, newY)) {
+                console.log(`Move invalid: blocked by wall`);
+                return false;
+            }
+            console.log(`Move valid`);
+            return true;
+        }
+
+        function isWallBlocking(x1, y1, x2, y2) {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            if (dx === 1) {
+                return gameState.walls.vertical.some(w => w.x === x1 && w.y === y1);
+            } else if (dx === -1) {
+                return gameState.walls.vertical.some(w => w.x === x1 - 1 && w.y === y1);
+            } else if (dy === 1) {
+                return gameState.walls.horizontal.some(w => w.x === x1 && w.y === y1);
+            } else if (dy === -1) {
+                return gameState.walls.horizontal.some(w => w.x === x1 && w.y === y1 - 1);
+            } else if (dx === 2) {
+                return gameState.walls.vertical.some(w => (w.x === x1 && w.y === y1) || (w.x === x1 + 1 && w.y === y1));
+            } else if (dx === -2) {
+                return gameState.walls.vertical.some(w => (w.x === x1 - 1 && w.y === y1) || (w.x === x1 - 2 && w.y === y1));
+            } else if (dy === 2) {
+                return gameState.walls.horizontal.some(w => (w.x === x1 && w.y === y1) || (w.x === x1 && w.y === y1 + 1));
+            } else if (dy === -2) {
+                return gameState.walls.horizontal.some(w => (w.x === x1 && w.y === y1 - 1) || (w.x === x1 && w.y === y1 - 2));
+            }
+            return false;
+        }
+
+        // Valid walls
+        function validWalls(type) {
+            const walls = [];
+            for (let x = 0; x < 8; x++) {
+                for (let y = 0; y < 8; y++) {
+                    if (isValidWall(x, y, type)) {
+                        walls.push({ x, y });
+                    }
+                }
+            }
+            return walls;
+        }
+
+        function isValidWall(x, y, type) {
+            console.log(`Checking wall placement: type=${type}, at (${x},${y})`);
+            if (x < 0 || y < 0 || x >= 8 || y >= 8) {
+                console.log(`Wall invalid: out of bounds`);
+                return false;
+            }
+            if (type === 'horizontal') {
+                if (gameState.walls.horizontal.some(w => w.x === x && w.y === y)) {
+                    console.log(`Wall invalid: horizontal overlap`);
+                    return false;
+                }
+                if (gameState.walls.vertical.some(w => (w.x === x && w.y === y) || (w.x === x + 1 && w.y === y))) {
+                    console.log(`Wall invalid: intersects vertical wall`);
+                    return false;
+                }
+            } else {
+                if (gameState.walls.vertical.some(w => w.x === x && w.y === y)) {
+                    console.log(`Wall invalid: vertical overlap`);
+                    return false;
+                }
+                if (gameState.walls.horizontal.some(w => (w.x === x && w.y === y) || (w.x === x && w.y === y + 1))) {
+                    console.log(`Wall invalid: intersects horizontal wall`);
+                    return false;
+                }
+            }
+            const tempGame = JSON.parse(JSON.stringify(gameState));
+            const wall = { x, y, playerId: gameState.players[gameState.currentPlayerIndex].id, color: gameState.players[gameState.currentPlayerIndex].color };
+            if (type === 'horizontal') {
+                tempGame.walls.horizontal.push(wall);
+            } else {
+                tempGame.walls.vertical.push(wall);
+            }
+            const hasPath = tempGame.players.every(player => hasPathToGoal(player, tempGame));
+            if (!hasPath) {
+                console.log(`Wall invalid: blocks all paths`);
+            } else {
+                console.log(`Wall valid`);
+            }
+            return hasPath;
+        }
+
+        function hasPathToGoal(player, game = gameState) {
+            const wallHash = game.walls.horizontal.map(w => `${w.x},${w.y}`).sort().join() + game.walls.vertical.map(w => `${w.x},${w.y}`).sort().join();
+            const cacheKey = `${player.id}:${player.pawn.x},${player.pawn.y}:${wallHash}`;
+            if (cacheKey in pathCache) return pathCache[cacheKey];
+            const visited = Array(9).fill().map(() => Array(9).fill(false));
+            const queue = [player.pawn];
+            visited[player.pawn.y][player.pawn.x] = true;
+            const directions = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+            while (queue.length) {
+                const current = queue.shift();
+                if (current.y === player.goalRow) {
+                    pathCache[cacheKey] = true;
+                    return true;
+                }
+                for (const [dx, dy] of directions) {
+                    const newX = current.x + dx;
+                    const newY = current.y + dy;
+                    if (newX >= 0 && newX < 9 && newY >= 0 && newY < 9 && !visited[newY][newX] && !isWallBlocking(current.x, current.y, newX, newY)) {
+                        visited[newY][newX] = true;
+                        queue.push({ x: newX, y: newY });
+                    }
+                }
+            }
+            pathCache[cacheKey] = false;
+            return false;
+        }
+
+        function shortestPathLength(player, game = gameState) {
+            const wallHash = game.walls.horizontal.map(w => `${w.x},${w.y}`).sort().join() + game.walls.vertical.map(w => `${w.x},${w.y}`).sort().join();
+            const cacheKey = `${player.id}:${player.pawn.x},${player.pawn.y}:${wallHash}`;
+            if (cacheKey in shortestPathCache) return shortestPathCache[cacheKey];
+            const visited = Array(9).fill().map(() => Array(9).fill(false));
+            const queue = [[player.pawn, 0]];
+            visited[player.pawn.y][player.pawn.x] = true;
+            const directions = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+            while (queue.length) {
+                const [current, distance] = queue.shift();
+                if (current.y === player.goalRow) {
+                    shortestPathCache[cacheKey] = distance;
+                    return distance;
+                }
+                for (const [dx, dy] of directions) {
+                    const newX = current.x + dx;
+                    const newY = current.y + dy;
+                    if (newX >= 0 && newX < 9 && newY >= 0 && newY < 9 && !visited[newY][newX] && !isWallBlocking(current.x, current.y, newX, newY)) {
+                        visited[newY][newX] = true;
+                        queue.push([{ x: newX, y: newY }, distance + 1]);
+                    }
+                }
+            }
+            shortestPathCache[cacheKey] = Infinity;
+            return Infinity;
+        }
+
+        // Smart AI
+        function makeComputerMove() {
+            if (!gameState.isComputerOpponent || !gameState.players[gameState.currentPlayerIndex].isComputer || gameState.gameOver) return;
+            const player = gameState.players[gameState.currentPlayerIndex];
+            // Switch strategy occasionally (10% chance)
+            if (Math.random() < 0.1) {
+                gameState.aiStrategy = ['goalOriented', 'wallHeavy', 'balanced'][Math.floor(Math.random() * 3)];
+                console.log(`Computer switched AI strategy to ${gameState.aiStrategy}`);
+            }
+            const moveProbability = gameState.aiStrategy === 'goalOriented' ? 0.7 : gameState.aiStrategy === 'wallHeavy' ? 0.3 : 0.5;
+            const action = (player.walls > 0 && Math.random() > moveProbability) ?
+                (Math.random() < 0.5 ? 'placeHorizontal' : 'placeVertical') : 'move';
+            if (action === 'move') {
+                const moves = validMoves(player);
+                const move = selectBestMove(player, moves);
+                if (move) {
+                    console.log(`Computer move: from (${player.pawn.x},${player.pawn.y}) to (${move.x},${move.y})`);
+                    player.pawn = move;
+                    if (move.y === player.goalRow) {
+                        gameState.gameOver = true;
+                        stopTimer();
+                    } else {
+                        switchPlayer();
+                    }
+                } else {
+                    console.log(`Computer: no valid moves, skipping turn`);
+                    switchPlayer();
+                }
+            } else {
+                const type = action === 'placeHorizontal' ? 'horizontal' : 'vertical';
+                const walls = validWalls(type);
+                const wall = selectBestWall(player, walls, type);
+                if (wall) {
+                    console.log(`Computer places ${type} wall at (${wall.x},${wall.y})`);
+                    gameState.walls[type].push({ x: wall.x, y: wall.y, playerId: player.id, color: player.color });
+                    player.walls--;
+                    switchPlayer();
+                } else {
+                    console.log(`Computer: no valid ${type} walls, skipping turn`);
+                    switchPlayer();
+                }
+            }
+            renderBoard();
+        }
+
+        function selectBestMove(player, moves) {
+            if (!moves.length) return null;
+            const opponent = gameState.players.find(p => p.id !== player.id);
+            let bestScore = Infinity;
+            let bestMove = null;
+            for (const move of moves) {
+                const tempGame = JSON.parse(JSON.stringify(gameState));
+                tempGame.players[tempGame.currentPlayerIndex].pawn = move;
+                const computerPath = shortestPathLength(tempGame.players[tempGame.currentPlayerIndex], tempGame);
+                const opponentPath = shortestPathLength(tempGame.players.find(p => p.id !== player.id), tempGame);
+                const score = computerPath - 0.5 * opponentPath;
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestMove = move;
+                }
+            }
+            return bestMove || moves[Math.floor(Math.random() * moves.length)];
+        }
+
+        function selectBestWall(player, walls, type) {
+            if (!walls.length) return null;
+            const opponent = gameState.players.find(p => p.id !== player.id);
+            let bestScore = -Infinity;
+            let bestWall = null;
+            for (const wall of walls) {
+                const tempGame = JSON.parse(JSON.stringify(gameState));
+                const wallObj = { x: wall.x, y: wall.y, playerId: player.id, color: player.color };
+                tempGame.walls[type].push(wallObj);
+                const computerPath = shortestPathLength(tempGame.players[tempGame.currentPlayerIndex], tempGame);
+                const opponentPath = shortestPathLength(tempGame.players.find(p => p.id !== player.id), tempGame);
+                const score = opponentPath - (computerPath > 10 ? 0.5 * computerPath : 0);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestWall = wall;
+                }
+            }
+            return bestWall || walls[Math.floor(Math.random() * walls.length)];
+        }
+
+        // Handle touch events
+        let lastTapTime = 0;
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const now = Date.now();
+            if (now - lastTapTime < 100) return; // Debounce 100ms
+            lastTapTime = now;
+            if (gameState.gameOver || gameState.players[gameState.currentPlayerIndex].isComputer) {
+                console.log(`Tap ignored: gameOver=${gameState.gameOver}, isComputer=${gameState.players[gameState.currentPlayerIndex].isComputer}`);
+                return;
+            }
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const touchX = (e.touches[0].clientX - rect.left) * scaleX;
+            const touchY = (e.touches[0].clientY - rect.top) * scaleY;
+            const x = Math.max(0, Math.min(8, Math.floor(touchX / cellSize)));
+            const y = Math.max(0, Math.min(8, Math.floor(touchY / cellSize)));
+            const player = gameState.players[gameState.currentPlayerIndex];
+            console.log(`Tap at (${touchX},${touchY}), mapped to (${x},${y}), action=${gameState.action}`);
+            if (gameState.action === 'move') {
+                const isValid = isValidMove(player, x, y);
+                console.log(`Move attempt: player=${player.id}, from=(${player.pawn.x},${player.pawn.y}) to=(${x},${y}), valid=${isValid}`);
+                if (isValid) {
+                    player.pawn = { x, y };
+                    if (y === player.goalRow) {
+                        gameState.gameOver = true;
+                        stopTimer();
+                    } else {
+                        switchPlayer();
+                    }
+                }
+            } else if (gameState.action === 'placeHorizontal' && player.walls > 0) {
+                const isValid = isValidWall(x, y, 'horizontal');
+                console.log(`Horizontal wall attempt: player=${player.id}, at=(${x},${y}), valid=${isValid}, walls=${player.walls}`);
+                if (isValid) {
+                    gameState.walls.horizontal.push({ x, y, playerId: player.id, color: player.color });
+                    player.walls--;
+                    switchPlayer();
+                }
+            } else if (gameState.action === 'placeVertical' && player.walls > 0) {
+                const isValid = isValidWall(x, y, 'vertical');
+                console.log(`Vertical wall attempt: player=${player.id}, at=(${x},${y}), valid=${isValid}, walls=${player.walls}`);
+                if (isValid) {
+                    gameState.walls.vertical.push({ x, y, playerId: player.id, color: player.color });
+                    player.walls--;
+                    switchPlayer();
+                }
+            } else {
+                console.log(`Action invalid: action=${gameState.action}, walls=${player.walls}`);
+            }
+            renderBoard();
+        });
+
+        // UI event listeners
+        document.getElementById('playerVsPlayer').addEventListener('click', () => {
+            document.getElementById('mainMenu').classList.add('hidden');
+            document.getElementById('gameScreen').classList.remove('hidden');
+            initGame(false);
+        });
+
+        document.getElementById('playerVsComputer').addEventListener('click', () => {
+            document.getElementById('mainMenu').classList.add('hidden');
+            document.getElementById('gameScreen').classList.remove('hidden');
+            initGame(true);
+        });
+
+        document.getElementById('tutorial').addEventListener('click', () => {
+            document.getElementById('mainMenu').classList.add('hidden');
+            document.getElementById('tutorialScreen').classList.remove('hidden');
+        });
+
+        document.getElementById('backToMenu').addEventListener('click', () => {
+            document.getElementById('gameScreen').classList.add('hidden');
+            document.getElementById('mainMenu').classList.remove('hidden');
+            stopTimer();
+        });
+
+        document.getElementById('backFromTutorial').addEventListener('click', () => {
+            document.getElementById('tutorialScreen').classList.add('hidden');
+            document.getElementById('mainMenu').classList.remove('hidden');
+        });
+
+        document.getElementById('movePawn').addEventListener('click', () => {
+            gameState.action = 'move';
+            updateButtonStyles();
+            updateStatusText();
+        });
+
+        document.getElementById('placeHorizontal').addEventListener('click', () => {
+            gameState.action = 'placeHorizontal';
+            updateButtonStyles();
+            updateStatusText();
+        });
+
+        document.getElementById('placeVertical').addEventListener('click', () => {
+            gameState.action = 'placeVertical';
+            updateButtonStyles();
+            updateStatusText();
+        });
+
+        function updateButtonStyles() {
+            document.getElementById('movePawn').className = `font-semibold py-2 px-4 rounded-lg ${gameState.action === 'move' ? 'bg-blue-500 text-white hover:bg-blue-600' : 'bg-gray-300 text-black hover:bg-gray-400'}`;
+            document.getElementById('placeHorizontal').className = `font-semibold py-2 px-4 rounded-lg ${gameState.action === 'placeHorizontal' ? 'bg-blue-500 text-white hover:bg-blue-600' : 'bg-gray-300 text-black hover:bg-gray-400'}`;
+            document.getElementById('placeVertical').className = `font-semibold py-2 px-4 rounded-lg ${gameState.action === 'placeVertical' ? 'bg-blue-500 text-white hover:bg-blue-600' : 'bg-gray-300 text-black hover:bg-gray-400'}`;
+        }
+        // Mouse click support
+        canvas.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const clickX = (e.clientX - rect.left) * scaleX;
+            const clickY = (e.clientY - rect.top) * scaleY;
+            const x = Math.max(0, Math.min(8, Math.floor(clickX / cellSize)));
+            const y = Math.max(0, Math.min(8, Math.floor(clickY / cellSize)));
+            const player = gameState.players[gameState.currentPlayerIndex];
+
+            if (gameState.gameOver || player.isComputer) return;
+
+            if (gameState.action === 'move') {
+                if (isValidMove(player, x, y)) {
+                    player.pawn = { x, y };
+                    if (y === player.goalRow) {
+                        gameState.gameOver = true;
+                        stopTimer();
+                    } else {
+                        switchPlayer();
+                    }
+                }
+            } else if (gameState.action === 'placeHorizontal' && player.walls > 0) {
+                if (isValidWall(x, y, 'horizontal')) {
+                    gameState.walls.horizontal.push({ x, y, playerId: player.id, color: player.color });
+                    player.walls--;
+                    switchPlayer();
+                }
+            } else if (gameState.action === 'placeVertical' && player.walls > 0) {
+                if (isValidWall(x, y, 'vertical')) {
+                    gameState.walls.vertical.push({ x, y, playerId: player.id, color: player.color });
+                    player.walls--;
+                    switchPlayer();
+                }
+            }
+
+            renderBoard();
+        });
+    </script>
+</body>
+</html>
